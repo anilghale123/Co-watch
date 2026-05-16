@@ -52,6 +52,7 @@ const SOCKET_EVENTS = Object.freeze({
   // --- chat ---
   CHAT_MESSAGE: 'chat:message',
   CHAT_TYPING: 'chat:typing',
+  CHAT_SEEN: 'chat:seen', // read receipt: "I have seen up to message X"
 
   // --- WebRTC signaling (server only relays, never touches media) ---
   RTC_SIGNAL: 'rtc:signal',
@@ -72,6 +73,18 @@ const PLAYER_STATE = Object.freeze({
   PAUSED: 'paused',
   BUFFERING: 'buffering',
   ENDED: 'ended',
+});
+
+/**
+ * Delivery lifecycle of a chat message, shown to the SENDER (Messenger-style):
+ *   sending   -> emitted, server has not echoed it back yet
+ *   delivered -> server received + broadcast it to the room
+ *   seen      -> at least one other peer has viewed it
+ */
+const MESSAGE_STATUS = Object.freeze({
+  SENDING: 'sending',
+  DELIVERED: 'delivered',
+  SEEN: 'seen',
 });
 
 /** Supported video backends behind the polymorphic controller. */
@@ -105,6 +118,12 @@ const MAX_ROOM_OCCUPANCY = 8;
 
 /** Chat buffer cap — bounds memory on long sessions (spec §2.3). */
 const CHAT_BUFFER_LIMIT = 200;
+
+/**
+ * Grace period before an emptied room (and its chat history) is discarded.
+ * Lets a solo user refresh the page without losing the conversation.
+ */
+const ROOM_EMPTY_GRACE_MS = 120000;
 
 /** Seek variance filter: drift <= this (seconds) does NOT trigger a hard seek. */
 const SEEK_TOLERANCE_SECONDS = 1.0;
@@ -150,6 +169,7 @@ const MAX_CHAT_LENGTH = 1000;
  * @property {Peer[]}            peers
  * @property {PlaybackState}     playback
  * @property {VideoSource|null}  source
+ * @property {ChatPayload[]}     messages Recent chat history (persisted server-side).
  * @property {number}            serverTime Server epoch ms (clock-skew anchor).
  * @property {string}            selfId   The receiving socket's own id.
  */
@@ -191,12 +211,28 @@ const MAX_CHAT_LENGTH = 1000;
  */
 
 /**
+ * @typedef {Object} ReplyRef
+ * Lightweight snapshot of the message being replied to (Messenger-style quote).
+ * @property {string} id          Quoted message id.
+ * @property {string} displayName Quoted message author.
+ * @property {string} text        Quoted message text (may be truncated).
+ */
+
+/**
  * @typedef {Object} ChatPayload
- * @property {string} id          Client-generated message id.
- * @property {string} socketId    Sender.
- * @property {string} displayName Sender label.
- * @property {string} text        Message body (<= MAX_CHAT_LENGTH).
- * @property {number} sentAt      Server epoch ms (server overwrites).
+ * @property {string}        id          Client-generated message id.
+ * @property {string}        socketId    Sender.
+ * @property {string}        displayName Sender label.
+ * @property {string}        text        Message body (<= MAX_CHAT_LENGTH).
+ * @property {number}        sentAt      Server epoch ms (server overwrites).
+ * @property {ReplyRef=}     replyTo     Set when this message replies to another.
+ * @property {string[]=}     seenBy      socketIds that have seen it (server/peer maintained).
+ * @property {string=}       status      Sender-local lifecycle (see MESSAGE_STATUS).
+ */
+
+/**
+ * @typedef {Object} SeenPayload
+ * @property {string} messageId The latest message id the sender has seen.
  */
 
 /**
@@ -316,19 +352,50 @@ function isValidSourcePayload(p) {
 }
 
 /**
+ * Guards an optional reply reference embedded in a chat message.
+ * @param {*} r
+ * @returns {boolean}
+ */
+function isValidReplyRef(r) {
+  return (
+    isObject(r) &&
+    isNonEmptyString(r.id) &&
+    r.id.length <= 64 &&
+    typeof r.text === 'string' &&
+    typeof r.displayName === 'string'
+  );
+}
+
+/**
  * Guards inbound CHAT_MESSAGE. Note `sentAt` is intentionally NOT trusted —
- * the server stamps it. We only require a usable text body + id.
+ * the server stamps it. We require a usable text body + id, and validate the
+ * optional `replyTo` reference if present.
  * @param {*} p
  * @returns {boolean}
  */
 function isValidChatPayload(p) {
-  return (
-    isObject(p) &&
-    isNonEmptyString(p.id) &&
-    p.id.length <= 64 &&
-    isNonEmptyString(p.text) &&
-    p.text.length <= MAX_CHAT_LENGTH
-  );
+  if (
+    !isObject(p) ||
+    !isNonEmptyString(p.id) ||
+    p.id.length > 64 ||
+    !isNonEmptyString(p.text) ||
+    p.text.length > MAX_CHAT_LENGTH
+  ) {
+    return false;
+  }
+  if (p.replyTo !== undefined && p.replyTo !== null && !isValidReplyRef(p.replyTo)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Guards inbound CHAT_SEEN read receipts.
+ * @param {*} p
+ * @returns {boolean}
+ */
+function isValidSeenPayload(p) {
+  return isObject(p) && isNonEmptyString(p.messageId) && p.messageId.length <= 64;
 }
 
 /**
@@ -382,10 +449,12 @@ function youtubeCodeToState(code) {
 module.exports = {
   SOCKET_EVENTS,
   PLAYER_STATE,
+  MESSAGE_STATUS,
   SOURCE_KIND,
   ROOM_ERROR_CODE,
   MAX_ROOM_OCCUPANCY,
   CHAT_BUFFER_LIMIT,
+  ROOM_EMPTY_GRACE_MS,
   SEEK_TOLERANCE_SECONDS,
   HEARTBEAT_INTERVAL_MS,
   MAX_CHAT_LENGTH,
@@ -402,7 +471,9 @@ module.exports = {
   isValidHeartbeatPayload,
   isValidBufferingPayload,
   isValidSourcePayload,
+  isValidReplyRef,
   isValidChatPayload,
+  isValidSeenPayload,
   isValidTypingPayload,
   isValidRtcSignalPayload,
   // helpers

@@ -17,7 +17,7 @@
 import { useEffect } from 'react';
 import { getSocket, destroySocket } from '@/lib/socket/socketClient';
 import { useRoomStore } from '@/features/rooms/stores/useRoomStore';
-import { SOCKET_EVENTS } from '@/features/rooms/room-types';
+import { SOCKET_EVENTS, MESSAGE_STATUS } from '@/features/rooms/room-types';
 
 /**
  * @param {string} roomId
@@ -116,11 +116,23 @@ export function useRoomSocket(roomId, displayName) {
     };
 
     const onChatMessage = (msg) => {
-      useRoomStore.getState().addChatMessage(msg);
+      const s = useRoomStore.getState();
+      s.addChatMessage(msg);
+      // Our own message echoed back by the server => it was delivered.
+      if (msg.socketId === s.selfId) {
+        const merged = useRoomStore.getState().chat.find((m) => m.id === msg.id);
+        const seen = merged && Array.isArray(merged.seenBy) && merged.seenBy.length > 0;
+        if (!seen) s.setMessageStatus(msg.id, MESSAGE_STATUS.DELIVERED);
+      }
     };
 
     const onChatTyping = (p) => {
       useRoomStore.getState().setTyping(p.socketId, p.displayName, p.typing);
+    };
+
+    const onChatSeen = (p) => {
+      if (!p || !p.socketId || !p.messageId) return;
+      useRoomStore.getState().markSeenUpTo(p.socketId, p.messageId);
     };
 
     /* ----------------- register ----------------- */
@@ -138,6 +150,7 @@ export function useRoomSocket(roomId, displayName) {
     socket.on(SOCKET_EVENTS.ROOM_ERROR, onRoomError);
     socket.on(SOCKET_EVENTS.CHAT_MESSAGE, onChatMessage);
     socket.on(SOCKET_EVENTS.CHAT_TYPING, onChatTyping);
+    socket.on(SOCKET_EVENTS.CHAT_SEEN, onChatSeen);
 
     if (socket.connected) onConnect();
     else socket.connect();
@@ -169,6 +182,7 @@ export function useRoomSocket(roomId, displayName) {
       socket.off(SOCKET_EVENTS.ROOM_ERROR, onRoomError);
       socket.off(SOCKET_EVENTS.CHAT_MESSAGE, onChatMessage);
       socket.off(SOCKET_EVENTS.CHAT_TYPING, onChatTyping);
+      socket.off(SOCKET_EVENTS.CHAT_SEEN, onChatSeen);
 
       destroySocket();
       useRoomStore.getState().reset();

@@ -52,9 +52,16 @@ VideoTile.propTypes = {
   mirrored: PropTypes.bool,
 };
 
+/** localStorage key for the overlay's last drag position. */
+const OVERLAY_POS_KEY = 'cowatch:av-overlay-pos';
+
 /**
  * Floating, draggable picture-in-picture overlay carrying the P2P voice/video
  * mesh. Server only signals; media is peer-to-peer (see useWebRTCConnection).
+ *
+ * It is freely draggable anywhere on screen by its title bar — on touchscreens
+ * too (`touch-none` on the handle stops the browser hijacking the gesture as a
+ * scroll). The drop position is remembered across reloads.
  */
 export default function WebRTCOverlay() {
   const {
@@ -74,47 +81,83 @@ export default function WebRTCOverlay() {
   // --- dragging ---
   const [pos, setPos] = useState({ x: 16, y: 16 });
   const [collapsed, setCollapsed] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const dragRef = useRef(null);
+  const panelRef = useRef(null);
   const dragState = useRef(null);
+  const posRef = useRef(pos);
+  posRef.current = pos;
 
-  // On phones the overlay starts collapsed so it does not cover the video.
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.innerWidth < 640) {
-      setCollapsed(true);
-    }
+  /** Keep a position fully inside the viewport (so it never strands off-screen). */
+  const clampPos = useCallback((p) => {
+    if (typeof window === 'undefined') return p;
+    const el = panelRef.current;
+    const w = el ? el.offsetWidth : 180;
+    const h = el ? el.offsetHeight : 140;
+    return {
+      x: Math.min(Math.max(8, window.innerWidth - w - 8), Math.max(8, p.x)),
+      y: Math.min(Math.max(8, window.innerHeight - h - 8), Math.max(8, p.y)),
+    };
   }, []);
+
+  // On mount: restore the last position the user dropped it at; collapse on
+  // phones only when there is no saved position yet.
+  useEffect(() => {
+    let restored = null;
+    try {
+      const raw = window.localStorage.getItem(OVERLAY_POS_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (Number.isFinite(saved.x) && Number.isFinite(saved.y)) restored = saved;
+      }
+    } catch { /* ignore corrupt value */ }
+    if (restored) setPos(clampPos(restored));
+    else if (window.innerWidth < 640) setCollapsed(true);
+  }, [clampPos]);
+
+  // Re-clamp on window resize / orientation change.
+  useEffect(() => {
+    const onResize = () => setPos((p) => clampPos(p));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [clampPos]);
 
   const onPointerDown = useCallback((e) => {
     dragState.current = {
       startX: e.clientX,
       startY: e.clientY,
-      originX: pos.x,
-      originY: pos.y,
+      originX: posRef.current.x,
+      originY: posRef.current.y,
     };
-    if (dragRef.current) dragRef.current.setPointerCapture(e.pointerId);
-  }, [pos]);
+    setDragging(true);
+    // Pointer capture keeps move/up events flowing even if the finger/cursor
+    // slips off the small handle mid-drag.
+    if (dragRef.current) {
+      try { dragRef.current.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    }
+  }, []);
 
   const onPointerMove = useCallback((e) => {
     if (!dragState.current) return;
     const dx = e.clientX - dragState.current.startX;
     const dy = e.clientY - dragState.current.startY;
-    const el = dragRef.current ? dragRef.current.parentElement : null;
-    const w = el ? el.offsetWidth : 160;
-    const h = el ? el.offsetHeight : 120;
-    // Clamp inside the viewport so the overlay can't be dragged off-screen.
-    const maxX = Math.max(8, window.innerWidth - w - 8);
-    const maxY = Math.max(8, window.innerHeight - h - 8);
-    setPos({
-      x: Math.min(maxX, Math.max(8, dragState.current.originX + dx)),
-      y: Math.min(maxY, Math.max(8, dragState.current.originY + dy)),
-    });
-  }, []);
+    setPos(clampPos({
+      x: dragState.current.originX + dx,
+      y: dragState.current.originY + dy,
+    }));
+  }, [clampPos]);
 
   const onPointerUp = useCallback((e) => {
+    if (!dragState.current) return;
     dragState.current = null;
+    setDragging(false);
     if (dragRef.current && dragRef.current.hasPointerCapture(e.pointerId)) {
-      dragRef.current.releasePointerCapture(e.pointerId);
+      try { dragRef.current.releasePointerCapture(e.pointerId); } catch { /* noop */ }
     }
+    // Remember where the user dropped it.
+    try {
+      window.localStorage.setItem(OVERLAY_POS_KEY, JSON.stringify(posRef.current));
+    } catch { /* storage unavailable */ }
   }, []);
 
   /** displayName lookup by socketId. */
@@ -130,21 +173,36 @@ export default function WebRTCOverlay() {
       className="fixed z-40 select-none"
       style={{ left: pos.x, top: pos.y }}
     >
-      <div className="w-fit rounded-xl border border-edge bg-panel/95 shadow-2xl backdrop-blur">
-        {/* drag handle */}
+      <div
+        ref={panelRef}
+        className={cn(
+          'w-fit rounded-xl border bg-panel/95 shadow-2xl backdrop-blur transition-shadow',
+          dragging ? 'border-accent2 ring-2 ring-accent2/40' : 'border-edge',
+        )}
+      >
+        {/* drag handle — touch-none lets it be dragged on touchscreens */}
         <div
           ref={dragRef}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          className="flex cursor-grab items-center justify-between gap-2 px-2 py-1 active:cursor-grabbing"
+          onPointerCancel={onPointerUp}
+          title="Drag to move"
+          className={cn(
+            'flex touch-none items-center justify-between gap-2 rounded-t-xl px-2 py-1.5',
+            dragging ? 'cursor-grabbing bg-white/5' : 'cursor-grab',
+          )}
         >
-          <span className="text-[11px] font-medium text-white/70">Voice &amp; Video</span>
+          <span className="flex items-center gap-1 text-[11px] font-medium text-white/70">
+            <span aria-hidden="true" className="text-sm leading-none text-white/40">⠿</span>
+            Voice &amp; Video
+          </span>
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setCollapsed((v) => !v)}
             aria-label={collapsed ? 'Expand video overlay' : 'Collapse video overlay'}
-            className="rounded px-1 text-white/60 hover:bg-white/10"
+            className="rounded px-1.5 text-white/60 hover:bg-white/10"
           >
             {collapsed ? '▢' : '—'}
           </button>

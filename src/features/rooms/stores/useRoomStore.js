@@ -57,6 +57,8 @@ const initialState = {
   chat: [],
   /** Map socketId -> displayName for peers currently typing. */
   typingPeers: {},
+  /** Message currently being replied to, or null. */
+  replyTarget: null,
 
   /* ---- clock skew (spec §3 gap #6) ---- */
   /** serverTime - localTime, in ms. Added to Date.now() to get server time. */
@@ -88,19 +90,35 @@ export const useRoomStore = create((set, get) => ({
 
   /**
    * Apply a full RoomSnapshot (ROOM_JOINED / SYNC_REQUEST reply). This is the
-   * authoritative resync path used on join and on reconnect.
+   * authoritative resync path used on join and on reconnect. Chat history from
+   * the snapshot is MERGED with any local messages (deduped by id) so a refresh
+   * restores the conversation without dropping in-flight optimistic messages.
    * @param {import('@/features/rooms/room-types').RoomSnapshot} snap
    */
   applyRoomSnapshot: (snap) =>
-    set({
-      selfId: snap.selfId,
-      hostId: snap.hostId,
-      peers: Array.isArray(snap.peers) ? snap.peers : [],
-      source: snap.source || null,
-      playbackState: snap.playback ? snap.playback.state : PLAYER_STATE.UNSTARTED,
-      playbackTime: snap.playback ? snap.playback.currentTime : 0,
-      roomFull: false,
-      socketError: null,
+    set((s) => {
+      let chat = s.chat;
+      if (Array.isArray(snap.messages) && snap.messages.length) {
+        const byId = new Map();
+        s.chat.forEach((m) => byId.set(m.id, m));
+        snap.messages.forEach((m) => {
+          const existing = byId.get(m.id);
+          byId.set(m.id, existing ? { ...existing, ...m } : m);
+        });
+        chat = Array.from(byId.values()).sort((a, b) => (a.sentAt || 0) - (b.sentAt || 0));
+        if (chat.length > CHAT_BUFFER_LIMIT) chat = chat.slice(chat.length - CHAT_BUFFER_LIMIT);
+      }
+      return {
+        selfId: snap.selfId,
+        hostId: snap.hostId,
+        peers: Array.isArray(snap.peers) ? snap.peers : [],
+        source: snap.source || null,
+        playbackState: snap.playback ? snap.playback.state : PLAYER_STATE.UNSTARTED,
+        playbackTime: snap.playback ? snap.playback.currentTime : 0,
+        chat,
+        roomFull: false,
+        socketError: null,
+      };
     }),
 
   /** @param {{hostId:string, peers:Array}} p */
@@ -136,19 +154,63 @@ export const useRoomStore = create((set, get) => ({
   /* ---------------- chat ---------------- */
 
   /**
-   * Append a chat message, keeping only the last CHAT_BUFFER_LIMIT. Dedupes by
-   * id so a reconnect replay can't double-insert.
+   * Insert OR merge a chat message (upsert), keeping the last CHAT_BUFFER_LIMIT
+   * and ordered by sentAt. Merging by id means a server echo updates the
+   * matching local optimistic message in place (no duplicate, no flicker).
    * @param {import('@/features/rooms/room-types').ChatPayload} msg
    */
   addChatMessage: (msg) =>
     set((s) => {
-      if (s.chat.some((m) => m.id === msg.id)) return s;
-      const next = s.chat.length >= CHAT_BUFFER_LIMIT
-        ? s.chat.slice(s.chat.length - CHAT_BUFFER_LIMIT + 1)
-        : s.chat.slice();
-      next.push(msg);
+      const idx = s.chat.findIndex((m) => m.id === msg.id);
+      let next = s.chat.slice();
+      if (idx !== -1) {
+        next[idx] = { ...next[idx], ...msg };
+      } else {
+        next.push(msg);
+        if (next.length > CHAT_BUFFER_LIMIT) next = next.slice(next.length - CHAT_BUFFER_LIMIT);
+      }
+      next.sort((a, b) => (a.sentAt || 0) - (b.sentAt || 0));
       return { chat: next };
     }),
+
+  /**
+   * Set the sender-local delivery status of one message.
+   * @param {string} id
+   * @param {string} status one of MESSAGE_STATUS
+   */
+  setMessageStatus: (id, status) =>
+    set((s) => {
+      const idx = s.chat.findIndex((m) => m.id === id);
+      if (idx === -1) return s;
+      const next = s.chat.slice();
+      next[idx] = { ...next[idx], status };
+      return { chat: next };
+    }),
+
+  /**
+   * Apply a read receipt: mark every message up to (and including) `messageId`
+   * as seen by `seerId`. The UI derives a "Seen" status from a non-empty
+   * `seenBy`.
+   * @param {string} seerId
+   * @param {string} messageId
+   */
+  markSeenUpTo: (seerId, messageId) =>
+    set((s) => {
+      const idx = s.chat.findIndex((m) => m.id === messageId);
+      if (idx === -1) return s;
+      const next = s.chat.slice();
+      for (let i = 0; i <= idx; i += 1) {
+        const m = next[i];
+        const seenBy = Array.isArray(m.seenBy) ? m.seenBy : [];
+        if (m.socketId !== seerId && seenBy.indexOf(seerId) === -1) {
+          next[i] = { ...m, seenBy: seenBy.concat(seerId) };
+        }
+      }
+      return { chat: next };
+    }),
+
+  /** @param {import('@/features/rooms/room-types').ChatPayload|null} msg */
+  setReplyTarget: (msg) => set({ replyTarget: msg }),
 
   /** Append a local-only system notice to the chat stream. */
   addSystemMessage: (text) =>

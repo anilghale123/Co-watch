@@ -43,6 +43,10 @@ function createRoom() {
     hostId: null,
     playback: { state: T.PLAYER_STATE.UNSTARTED, currentTime: 0, updatedAt: Date.now() },
     source: null,
+    /** @type {Array<import('../../features/rooms/room-types.js').ChatPayload>} */
+    messages: [], // recent chat history — survives a refresh / brief absence
+    /** @type {NodeJS.Timeout|null} */
+    emptyTimer: null, // grace-period deletion timer (see leaveRoom)
   };
 }
 
@@ -73,6 +77,7 @@ function buildSnapshot(roomId, room, selfId) {
     peers: serializePeers(room),
     playback: room.playback,
     source: room.source,
+    messages: room.messages, // resync chat history on join / reconnect
     serverTime: Date.now(),
     selfId,
   };
@@ -146,6 +151,12 @@ function handleConnection(socket) {
       if (!room) {
         room = createRoom();
         rooms.set(roomId, room);
+      }
+      // Someone (re)joined — cancel any pending grace-period deletion so the
+      // chat history is kept.
+      if (room.emptyTimer) {
+        clearTimeout(room.emptyTimer);
+        room.emptyTimer = null;
       }
 
       // Occupancy enforcement — reject the overflow connection cleanly.
@@ -319,7 +330,21 @@ function handleConnection(socket) {
         displayName: socket.data.displayName,
         text: payload.text.slice(0, T.MAX_CHAT_LENGTH),
         sentAt: Date.now(),
+        seenBy: [],
       };
+      // Carry a sanitized reply reference if this is a reply.
+      if (payload.replyTo && T.isValidReplyRef(payload.replyTo)) {
+        message.replyTo = {
+          id: payload.replyTo.id,
+          displayName: String(payload.replyTo.displayName).slice(0, 40),
+          text: String(payload.replyTo.text).slice(0, 160),
+        };
+      }
+      // Persist to the room's history buffer (capped).
+      room.messages.push(message);
+      if (room.messages.length > T.CHAT_BUFFER_LIMIT) {
+        room.messages = room.messages.slice(-T.CHAT_BUFFER_LIMIT);
+      }
       io.to(socket.data.roomId).emit(T.SOCKET_EVENTS.CHAT_MESSAGE, message);
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -335,6 +360,34 @@ function handleConnection(socket) {
       displayName: socket.data.displayName,
       typing: payload.typing,
     });
+  });
+
+  /* ---- CHAT_SEEN: read receipts ---- */
+  socket.on(T.SOCKET_EVENTS.CHAT_SEEN, (payload) => {
+    try {
+      const room = currentRoom();
+      if (!room || !T.isValidSeenPayload(payload)) return;
+      // Mark every message up to (and including) the seen one — from OTHER
+      // senders — as seen by this socket, so late joiners get accurate history.
+      const idx = room.messages.findIndex((m) => m.id === payload.messageId);
+      if (idx !== -1) {
+        for (let i = 0; i <= idx; i += 1) {
+          const m = room.messages[i];
+          if (!Array.isArray(m.seenBy)) m.seenBy = [];
+          if (m.socketId !== socket.id && m.seenBy.indexOf(socket.id) === -1) {
+            m.seenBy.push(socket.id);
+          }
+        }
+      }
+      // Relay to the rest of the room so senders update their receipts live.
+      socket.to(socket.data.roomId).emit(T.SOCKET_EVENTS.CHAT_SEEN, {
+        socketId: socket.id,
+        messageId: payload.messageId,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[socket] chat:seen handler error', err);
+    }
   });
 
   /* ---- WebRTC signaling relay (scoped to the joined room) ---- */
@@ -373,7 +426,13 @@ function handleConnection(socket) {
     room.peers.delete(socket.id);
 
     if (room.peers.size === 0) {
-      rooms.delete(roomId); // empty-room cleanup
+      // Don't discard immediately — keep the room (and its chat history) for a
+      // grace period so a solo user can refresh without losing the chat.
+      if (room.emptyTimer) clearTimeout(room.emptyTimer);
+      room.emptyTimer = setTimeout(() => {
+        const r = rooms.get(roomId);
+        if (r && r.peers.size === 0) rooms.delete(roomId);
+      }, T.ROOM_EMPTY_GRACE_MS);
       return;
     }
 

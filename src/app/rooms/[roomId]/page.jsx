@@ -33,6 +33,62 @@ function ConnectionPill() {
 }
 
 /**
+ * Prominent invite strip — shown while you are the only person in the room so
+ * you always have a shareable link in front of you, not just a header button.
+ */
+function InviteBanner({ roomId }) {
+  const peerCount = useRoomStore((s) => s.peers.length);
+  const [dismissed, setDismissed] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [url, setUrl] = useState('');
+
+  useEffect(() => {
+    setUrl(`${window.location.origin}/rooms/${encodeURIComponent(roomId)}`);
+  }, [roomId]);
+
+  // Once someone else joins, the banner is no longer needed.
+  if (dismissed || peerCount > 1) return null;
+
+  function copy() {
+    if (navigator.clipboard && url) {
+      navigator.clipboard.writeText(url).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      });
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 flex-col gap-2 border-b border-edge bg-accent2/10 px-3 py-2 sm:flex-row sm:items-center sm:px-4">
+      <p className="text-xs text-white/80">
+        <span aria-hidden="true">🔗 </span>
+        You&apos;re the only one here — share this link to watch together:
+      </p>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <input
+          readOnly
+          value={url}
+          aria-label="Room invite link"
+          onFocus={(e) => e.target.select()}
+          className="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-2 py-1.5 text-xs text-white/70"
+        />
+        <Button size="sm" variant="primary" onClick={copy}>
+          {copied ? 'Copied!' : 'Copy'}
+        </Button>
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          aria-label="Dismiss invite banner"
+          className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The private room — orchestrates the four real-time subsystems behind one
  * connection lifecycle.
  *
@@ -123,6 +179,9 @@ export default function RoomPage({ params, searchParams }) {
           </Link>
         </div>
       </header>
+
+      {/* invite strip — visible while you are alone */}
+      <InviteBanner roomId={roomId} />
 
       {/* body */}
       <div className="flex min-h-0 flex-1 flex-row">
