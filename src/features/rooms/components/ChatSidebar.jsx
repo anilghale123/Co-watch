@@ -166,7 +166,7 @@ export default function ChatSidebar() {
           maxLength={MAX_CHAT_LENGTH}
           autoComplete="off"
           placeholder="Message…"
-          className="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-accent2 focus:outline-none"
+          className="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-3 py-2 text-base text-white placeholder:text-white/30 focus:border-accent2 focus:outline-none sm:text-sm"
         />
         <Button type="submit" variant="primary" disabled={!draft.trim()}>
           Send

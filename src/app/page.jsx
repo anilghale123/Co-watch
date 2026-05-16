@@ -64,7 +64,7 @@ export default function HomePage() {
               maxLength={40}
               onChange={(e) => { setName(e.target.value); setError(''); }}
               placeholder="e.g. Alex"
-              className="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm focus:border-accent2 focus:outline-none"
+              className="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-base focus:border-accent2 focus:outline-none sm:text-sm"
             />
           </div>
 
@@ -86,7 +86,7 @@ export default function HomePage() {
               value={joinId}
               onChange={(e) => { setJoinId(e.target.value); setError(''); }}
               placeholder="Paste a room link or id"
-              className="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm focus:border-accent2 focus:outline-none"
+              className="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-base focus:border-accent2 focus:outline-none sm:text-sm"
             />
             <Button type="submit" variant="secondary" className="w-full">
               Join room

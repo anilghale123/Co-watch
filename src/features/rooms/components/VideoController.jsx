@@ -48,7 +48,7 @@ export default function VideoController({
   const max = duration > 0 ? duration : 0;
 
   return (
-    <div className="flex items-center gap-3 border-t border-edge bg-panel px-3 py-2">
+    <div className="flex items-center gap-1.5 border-t border-edge bg-panel px-2 py-2 sm:gap-3 sm:px-3">
       <Button
         size="icon"
         variant="ghost"
@@ -59,7 +59,7 @@ export default function VideoController({
         <span aria-hidden="true">{isPlaying ? '⏸' : '▶'}</span>
       </Button>
 
-      <span className="w-12 text-right text-xs tabular-nums text-white/70">
+      <span className="w-9 text-right text-[11px] tabular-nums text-white/70 sm:w-12 sm:text-xs">
         {formatTime(displayTime)}
       </span>
 
@@ -90,7 +90,7 @@ export default function VideoController({
         className="h-1.5 flex-1 cursor-pointer accent-accent"
       />
 
-      <span className="w-12 text-xs tabular-nums text-white/50">
+      <span className="w-9 text-[11px] tabular-nums text-white/50 sm:w-12 sm:text-xs">
         {formatTime(max)}
       </span>
 

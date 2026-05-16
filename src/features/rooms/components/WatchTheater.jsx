@@ -159,7 +159,7 @@ export default function WatchTheater() {
             onChange={(e) => setLinkInput(e.target.value)}
             placeholder="Paste a YouTube or .mp4 / .m3u8 link…"
             aria-label="Video link"
-            className="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-accent2 focus:outline-none"
+            className="min-w-0 flex-1 rounded-lg border border-edge bg-ink px-3 py-2 text-base text-white placeholder:text-white/30 focus:border-accent2 focus:outline-none sm:text-sm"
           />
           <Button type="submit" variant="primary">
             {source ? 'Change video' : 'Load video'}

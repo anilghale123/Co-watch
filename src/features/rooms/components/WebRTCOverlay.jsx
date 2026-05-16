@@ -6,6 +6,7 @@ import PropTypes from 'prop-types';
 import { useWebRTCConnection } from '@/features/rooms/hooks/useWebRTCConnection';
 import { useRoomStore } from '@/features/rooms/stores/useRoomStore';
 import Button from '@/components/ui/Button';
+import { cn } from '@/lib/utils';
 
 /**
  * One <video> tile. Attaching a MediaStream must happen via the `srcObject`
@@ -32,7 +33,10 @@ function VideoTile({ stream, label, muted, mirrored }) {
         autoPlay
         playsInline
         muted={muted}
-        className={mirrored ? 'h-24 w-32 object-cover [transform:scaleX(-1)]' : 'h-24 w-32 object-cover'}
+        className={cn(
+          'h-20 w-28 object-cover sm:h-24 sm:w-32',
+          mirrored && '[transform:scaleX(-1)]',
+        )}
       />
       <span className="absolute bottom-0.5 left-1 text-[10px] text-white/80 drop-shadow">
         {label}
@@ -73,6 +77,13 @@ export default function WebRTCOverlay() {
   const dragRef = useRef(null);
   const dragState = useRef(null);
 
+  // On phones the overlay starts collapsed so it does not cover the video.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) {
+      setCollapsed(true);
+    }
+  }, []);
+
   const onPointerDown = useCallback((e) => {
     dragState.current = {
       startX: e.clientX,
@@ -87,9 +98,15 @@ export default function WebRTCOverlay() {
     if (!dragState.current) return;
     const dx = e.clientX - dragState.current.startX;
     const dy = e.clientY - dragState.current.startY;
+    const el = dragRef.current ? dragRef.current.parentElement : null;
+    const w = el ? el.offsetWidth : 160;
+    const h = el ? el.offsetHeight : 120;
+    // Clamp inside the viewport so the overlay can't be dragged off-screen.
+    const maxX = Math.max(8, window.innerWidth - w - 8);
+    const maxY = Math.max(8, window.innerHeight - h - 8);
     setPos({
-      x: Math.max(8, dragState.current.originX + dx),
-      y: Math.max(8, dragState.current.originY + dy),
+      x: Math.min(maxX, Math.max(8, dragState.current.originX + dx)),
+      y: Math.min(maxY, Math.max(8, dragState.current.originY + dy)),
     });
   }, []);
 
@@ -161,7 +178,7 @@ export default function WebRTCOverlay() {
                 <VideoTile key={id} stream={remoteStreams[id]} label={nameOf(id)} />
               ))}
               {remoteIds.length === 0 && mediaPermission !== 'denied' ? (
-                <div className="flex h-24 w-32 items-center justify-center rounded-lg bg-ink text-center text-[10px] text-white/40">
+                <div className="flex h-20 w-28 items-center justify-center rounded-lg bg-ink text-center text-[10px] text-white/40 sm:h-24 sm:w-32">
                   Waiting for others to join…
                 </div>
               ) : null}

@@ -26,18 +26,21 @@ export default function FloatingSidebar({ title, children, defaultOpen = true })
         {open ? (
           <span className="text-sm font-semibold text-white/90">{title}</span>
         ) : null}
+        {/* Collapse is a desktop affordance only — on mobile the sidebar is a
+            full-screen tab, so the toggle is hidden there. */}
         <Button
           size="icon"
           variant="ghost"
           aria-expanded={open}
           aria-label={open ? `Collapse ${title}` : `Expand ${title}`}
           onClick={() => setOpen((v) => !v)}
-          className="ml-auto"
+          className="ml-auto hidden sm:inline-flex"
         >
           <span aria-hidden="true">{open ? '⟩' : '⟨'}</span>
         </Button>
       </div>
-      <div className={cn('flex-1 overflow-hidden', open ? 'block' : 'hidden')}>
+      {/* Always shown on mobile; obeys the collapse state from sm and up. */}
+      <div className={cn('flex-1 overflow-hidden', open ? 'block' : 'block sm:hidden')}>
         {children}
       </div>
     </aside>

@@ -1,7 +1,7 @@
 // src/app/rooms/[roomId]/page.jsx
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import Modal from '@/components/ui/Modal';
@@ -12,6 +12,7 @@ import { useRoomStore } from '@/features/rooms/stores/useRoomStore';
 import WatchTheater from '@/features/rooms/components/WatchTheater';
 import ChatSidebar from '@/features/rooms/components/ChatSidebar';
 import WebRTCOverlay from '@/features/rooms/components/WebRTCOverlay';
+import { cn } from '@/lib/utils';
 
 /** Small connection-status pill driven by the Zustand store. */
 function ConnectionPill() {
@@ -25,7 +26,7 @@ function ConnectionPill() {
   };
   const s = map[status] || map.idle;
   return (
-    <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${s.cls}`}>
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-[11px] ${s.cls}`}>
       {s.text}
     </span>
   );
@@ -34,6 +35,11 @@ function ConnectionPill() {
 /**
  * The private room — orchestrates the four real-time subsystems behind one
  * connection lifecycle.
+ *
+ * Responsive strategy: WatchTheater and ChatSidebar are mounted ONCE (mounting
+ * twice would create two player controllers / two chat instances). On phones a
+ * bottom tab bar toggles which one is *visible* via CSS; the hidden one keeps
+ * running, so playback sync and chat never drop when you switch tabs.
  */
 export default function RoomPage({ params, searchParams }) {
   const roomId = decodeURIComponent(params.roomId);
@@ -42,11 +48,21 @@ export default function RoomPage({ params, searchParams }) {
   const [displayName, setDisplayName] = useState(initialName);
   const [nameDraft, setNameDraft] = useState('');
   const [copied, setCopied] = useState(false);
+  /** Mobile-only view toggle: 'watch' | 'chat'. Ignored at >= sm. */
+  const [mobileTab, setMobileTab] = useState('watch');
+  const [seenChatCount, setSeenChatCount] = useState(0);
 
   const roomFull = useRoomStore((s) => s.roomFull);
+  const chatCount = useRoomStore((s) => s.chat.length);
 
   // Owns the connection lifecycle. No-ops while displayName is empty.
   useRoomSocket(roomId, displayName);
+
+  // Track unread messages while the Chat tab is not the active mobile view.
+  useEffect(() => {
+    if (mobileTab === 'chat') setSeenChatCount(chatCount);
+  }, [mobileTab, chatCount]);
+  const unread = Math.max(0, chatCount - seenChatCount);
 
   function copyInvite() {
     const url = `${window.location.origin}/rooms/${encodeURIComponent(roomId)}`;
@@ -76,7 +92,7 @@ export default function RoomPage({ params, searchParams }) {
             value={nameDraft}
             onChange={(e) => setNameDraft(e.target.value)}
             placeholder="Your display name"
-            className="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-sm focus:border-accent2 focus:outline-none"
+            className="w-full rounded-lg border border-edge bg-ink px-3 py-2 text-base focus:border-accent2 focus:outline-none"
           />
           <Button type="submit" variant="primary" className="w-full" disabled={!nameDraft.trim()}>
             Join room
@@ -87,16 +103,18 @@ export default function RoomPage({ params, searchParams }) {
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    // 100dvh keeps the layout correct under mobile browser chrome.
+    <div className="flex h-[100dvh] flex-col overflow-hidden">
       {/* header */}
-      <header className="flex items-center gap-3 border-b border-edge bg-panel px-4 py-2">
+      <header className="flex shrink-0 items-center gap-2 border-b border-edge bg-panel px-3 py-2 sm:px-4">
         <Link href="/" className="text-sm font-bold">
           Co<span className="text-accent">Watch</span>
         </Link>
         <ConnectionPill />
         <div className="ml-auto flex items-center gap-2">
           <Button size="sm" variant="secondary" onClick={copyInvite}>
-            {copied ? 'Link copied!' : 'Copy invite link'}
+            <span className="hidden sm:inline">{copied ? 'Link copied!' : 'Copy invite link'}</span>
+            <span className="sm:hidden">{copied ? 'Copied!' : 'Invite'}</span>
           </Button>
           <Link href="/">
             <Button size="sm" variant="ghost" aria-label="Leave room">
@@ -107,16 +125,69 @@ export default function RoomPage({ params, searchParams }) {
       </header>
 
       {/* body */}
-      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-        <ErrorBoundary>
-          <WatchTheater />
-        </ErrorBoundary>
-        <ErrorBoundary>
-          <FloatingSidebar title="Room chat">
-            <ChatSidebar />
-          </FloatingSidebar>
-        </ErrorBoundary>
+      <div className="flex min-h-0 flex-1 flex-row">
+        {/* theater — full screen on mobile when the Watch tab is active */}
+        <div
+          className={cn(
+            'min-w-0 flex-1 flex-col',
+            mobileTab === 'watch' ? 'flex' : 'hidden',
+            'sm:flex',
+          )}
+        >
+          <ErrorBoundary>
+            <WatchTheater />
+          </ErrorBoundary>
+        </div>
+
+        {/* chat — full screen on mobile when the Chat tab is active */}
+        <div
+          className={cn(
+            'min-h-0 w-full flex-col sm:w-auto',
+            mobileTab === 'chat' ? 'flex' : 'hidden',
+            'sm:flex',
+          )}
+        >
+          <ErrorBoundary>
+            <FloatingSidebar title="Room chat">
+              <ChatSidebar />
+            </FloatingSidebar>
+          </ErrorBoundary>
+        </div>
       </div>
+
+      {/* mobile-only bottom tab bar */}
+      <nav
+        className="flex shrink-0 border-t border-edge bg-panel sm:hidden"
+        aria-label="Switch between video and chat"
+      >
+        <button
+          type="button"
+          onClick={() => setMobileTab('watch')}
+          aria-current={mobileTab === 'watch'}
+          className={cn(
+            'flex flex-1 items-center justify-center gap-2 py-2.5 text-sm font-medium',
+            mobileTab === 'watch' ? 'text-accent' : 'text-white/55',
+          )}
+        >
+          <span aria-hidden="true">▶</span> Watch
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab('chat')}
+          aria-current={mobileTab === 'chat'}
+          className={cn(
+            'relative flex flex-1 items-center justify-center gap-2 py-2.5 text-sm font-medium',
+            mobileTab === 'chat' ? 'text-accent' : 'text-white/55',
+          )}
+        >
+          <span aria-hidden="true">💬</span> Chat
+          {unread > 0 && mobileTab !== 'chat' ? (
+            <span className="absolute right-1/4 top-1 rounded-full bg-accent px-1.5 text-[10px] font-bold text-white">
+              {unread > 9 ? '9+' : unread}
+            </span>
+          ) : null}
+        </button>
+      </nav>
 
       {/* floating P2P A/V mesh */}
       <ErrorBoundary fallback={null}>
