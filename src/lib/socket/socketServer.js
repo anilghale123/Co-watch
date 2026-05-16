@@ -315,6 +315,32 @@ function handleConnection(socket) {
     socket.emit(T.SOCKET_EVENTS.ROOM_JOINED, buildSnapshot(socket.data.roomId, room, socket.id));
   });
 
+  /* ---- HOST_TRANSFER (only the current host may hand off authority) ---- */
+  socket.on(T.SOCKET_EVENTS.HOST_TRANSFER, (payload) => {
+    try {
+      const room = currentRoom();
+      if (!room) return reject('host:transfer', T.ROOM_ERROR_CODE.NOT_IN_ROOM);
+      if (room.hostId !== socket.id) {
+        return reject('host:transfer', T.ROOM_ERROR_CODE.NOT_HOST);
+      }
+      if (!T.isValidHostTransferPayload(payload)) {
+        return reject('host:transfer', T.ROOM_ERROR_CODE.INVALID_PAYLOAD);
+      }
+      // The new host must actually be in this room.
+      if (!room.peers.has(payload.targetId)) {
+        return reject('host:transfer', T.ROOM_ERROR_CODE.NOT_IN_ROOM);
+      }
+      if (payload.targetId === room.hostId) return; // already the host — no-op
+      room.hostId = payload.targetId;
+      // HOST_CHANGED flips authority on every client; presence repaints badges.
+      io.to(socket.data.roomId).emit(T.SOCKET_EVENTS.HOST_CHANGED, { hostId: room.hostId });
+      broadcastPresence(socket.data.roomId, room);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[socket] host:transfer handler error', err);
+    }
+  });
+
   /* ---- CHAT ---- */
   socket.on(T.SOCKET_EVENTS.CHAT_MESSAGE, (payload) => {
     try {

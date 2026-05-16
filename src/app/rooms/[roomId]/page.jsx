@@ -107,12 +107,38 @@ export default function RoomPage({ params, searchParams }) {
   /** Mobile-only view toggle: 'watch' | 'chat'. Ignored at >= sm. */
   const [mobileTab, setMobileTab] = useState('watch');
   const [seenChatCount, setSeenChatCount] = useState(0);
+  /** Gate render until we've checked storage for a saved name (avoids a flash). */
+  const [nameResolved, setNameResolved] = useState(false);
 
   const roomFull = useRoomStore((s) => s.roomFull);
   const chatCount = useRoomStore((s) => s.chat.length);
 
   // Owns the connection lifecycle. No-ops while displayName is empty.
   useRoomSocket(roomId, displayName);
+
+  // On first mount: if the URL carried no ?name= (e.g. joined via an invite
+  // link), recover the display name saved from a previous visit. This is what
+  // makes a REFRESH keep you in the room instead of re-prompting / kicking you
+  // back to the name screen.
+  useEffect(() => {
+    if (!displayName) {
+      try {
+        const saved = window.localStorage.getItem('cowatch:displayName');
+        if (saved) setDisplayName(saved);
+      } catch { /* storage unavailable */ }
+    }
+    setNameResolved(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the name whenever it is set, so the next refresh restores it.
+  useEffect(() => {
+    if (displayName) {
+      try {
+        window.localStorage.setItem('cowatch:displayName', displayName);
+      } catch { /* storage unavailable */ }
+    }
+  }, [displayName]);
 
   // Track unread messages while the Chat tab is not the active mobile view.
   useEffect(() => {
@@ -129,6 +155,10 @@ export default function RoomPage({ params, searchParams }) {
       });
     }
   }
+
+  // Don't render anything (not even the name modal) until storage is checked —
+  // prevents a one-frame flash of the name prompt on every refresh.
+  if (!nameResolved) return null;
 
   /* ---- name gate: must have a display name before joining ---- */
   if (!displayName) {

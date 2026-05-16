@@ -1,7 +1,7 @@
 // src/app/page.jsx
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/Button';
 import { generateRoomId } from '@/lib/utils';
@@ -16,12 +16,24 @@ export default function HomePage() {
   const [joinId, setJoinId] = useState('');
   const [error, setError] = useState('');
 
+  // Pre-fill the name from a previous visit (saved on join / in the room).
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('cowatch:displayName');
+      if (saved) setName(saved);
+    } catch { /* storage unavailable */ }
+  }, []);
+
   function go(roomId) {
     const clean = name.trim();
     if (!clean) {
       setError('Pick a display name first.');
       return;
     }
+    // Persist so a later refresh inside the room keeps you signed in.
+    try {
+      window.localStorage.setItem('cowatch:displayName', clean);
+    } catch { /* storage unavailable */ }
     router.push(`/rooms/${encodeURIComponent(roomId)}?name=${encodeURIComponent(clean)}`);
   }
 

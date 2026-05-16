@@ -132,6 +132,20 @@ export default function ChatSidebar() {
     typingTimer.current = setTimeout(() => emitTyping(false), 1500);
   }
 
+  const amIHost = !!selfId && selfId === hostId;
+
+  /** Hand host authority (playback control) to another peer. */
+  function makeHost(target) {
+    if (typeof window !== 'undefined'
+      && !window.confirm(`Make ${target.displayName} the host? They will control playback for everyone.`)) {
+      return;
+    }
+    const socket = getSocket();
+    if (socket && socket.connected) {
+      socket.emit(SOCKET_EVENTS.HOST_TRANSFER, { targetId: target.socketId });
+    }
+  }
+
   function startReply(message) {
     setReplyTarget({
       id: message.id,
@@ -211,6 +225,17 @@ export default function ChatSidebar() {
               {p.socketId === selfId ? ' (you)' : ''}
               {p.socketId === hostId ? (
                 <span className="rounded bg-accent2/30 px-1 text-[10px] text-accent2">host</span>
+              ) : null}
+              {/* only the current host can hand control to another peer */}
+              {amIHost && p.socketId !== selfId && p.socketId !== hostId ? (
+                <button
+                  type="button"
+                  onClick={() => makeHost(p)}
+                  title={`Make ${p.displayName} the host`}
+                  className="ml-0.5 rounded bg-accent2/20 px-1.5 py-0.5 text-[10px] font-medium text-accent2 hover:bg-accent2/40"
+                >
+                  Make host
+                </button>
               ) : null}
             </li>
           ))}

@@ -259,6 +259,36 @@ export function useVideoSync(controllerRef) {
     }
   }, [amHost, controllerRef, emit]);
 
+  /**
+   * Force a re-sync + repaint. A hidden/backgrounded player keeps its audio
+   * and clock running but STOPS painting video frames, so seeks applied while
+   * it was hidden leave a frozen picture once it is shown again. Call this when
+   * the player becomes visible to snap the frame back to the live position.
+   */
+  const resync = useCallback(() => {
+    const ctrl = controllerRef.current;
+    if (!ctrl) return;
+    if (amHost()) {
+      // Host is authoritative — just force a repaint at the current position.
+      applyRemote(() => ctrl.seekTo(ctrl.getCurrentTime()), null);
+      return;
+    }
+    // Guest: pull fresh authoritative state AND force the local player to the
+    // best-known position so a frozen frame catches up immediately.
+    emit(SOCKET_EVENTS.SYNC_REQUEST, {});
+    const s = readStore();
+    const target = Number.isFinite(s.playbackTime) && s.playbackTime > 0
+      ? s.playbackTime
+      : ctrl.getCurrentTime();
+    applyRemote(
+      () => ctrl.seekTo(target),
+      s.playbackState === PLAYER_STATE.PLAYING ? PLAYER_STATE.PLAYING : null,
+    );
+    if (s.playbackState === PLAYER_STATE.PLAYING && ctrl.getState() !== PLAYER_STATE.PLAYING) {
+      applyRemote(() => ctrl.play(), PLAYER_STATE.PLAYING);
+    }
+  }, [amHost, applyRemote, controllerRef, emit]);
+
   /* ------------------------------------------------------------------ *
    * Inbound sync listeners + host heartbeat
    * ------------------------------------------------------------------ */
@@ -318,6 +348,9 @@ export function useVideoSync(controllerRef) {
           applyRemote(() => ctrl.play(), PLAYER_STATE.PLAYING);
         }
       } else if (p.state === PLAYER_STATE.PAUSED) {
+        // Reconcile position even while paused so a seek-while-paused that
+        // missed its single SYNC_SEEK event still self-heals on the next tick.
+        reconcileTime(target, false);
         if (ctrl.getState() === PLAYER_STATE.PLAYING) {
           applyRemote(() => ctrl.pause(), PLAYER_STATE.PAUSED);
         }
@@ -411,5 +444,5 @@ export function useVideoSync(controllerRef) {
     };
   }, [amHost, applyRemote, controllerRef, emit, reconcileTime, serverNow]);
 
-  return { onPlayerStateChange, onPlayerReady, requestPlay, requestPause, requestSeek };
+  return { onPlayerStateChange, onPlayerReady, requestPlay, requestPause, requestSeek, resync };
 }

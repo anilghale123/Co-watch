@@ -99,8 +99,12 @@ export function useRoomSocket(roomId, displayName) {
     const onHostChanged = ({ hostId }) => {
       const s = useRoomStore.getState();
       s.setHost(hostId);
-      const me = s.selfId === hostId;
-      s.addSystemMessage(me ? 'You are now the host.' : 'The host changed.');
+      if (s.selfId === hostId) {
+        s.addSystemMessage('You are now the host — playback controls are yours.');
+      } else {
+        const p = s.peers.find((x) => x.socketId === hostId);
+        s.addSystemMessage(`${p ? p.displayName : 'Someone'} is now the host.`);
+      }
     };
 
     const onRoomFull = (p) => {

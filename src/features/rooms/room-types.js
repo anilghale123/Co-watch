@@ -38,6 +38,7 @@ const SOCKET_EVENTS = Object.freeze({
   ROOM_ERROR: 'room:error',
   PRESENCE_UPDATE: 'presence:update',
   HOST_CHANGED: 'host:changed',
+  HOST_TRANSFER: 'host:transfer', // current host hands authority to another peer
 
   // --- playback sync (host is authoritative) ---
   SYNC_PLAY: 'sync:play',
@@ -399,6 +400,15 @@ function isValidSeenPayload(p) {
 }
 
 /**
+ * Guards inbound HOST_TRANSFER requests.
+ * @param {*} p
+ * @returns {boolean}
+ */
+function isValidHostTransferPayload(p) {
+  return isObject(p) && isNonEmptyString(p.targetId) && p.targetId.length <= 64;
+}
+
+/**
  * @param {*} p
  * @returns {boolean}
  */
@@ -474,6 +484,7 @@ module.exports = {
   isValidReplyRef,
   isValidChatPayload,
   isValidSeenPayload,
+  isValidHostTransferPayload,
   isValidTypingPayload,
   isValidRtcSignalPayload,
   // helpers

@@ -67,6 +67,45 @@ export default function WatchTheater() {
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
+  /* ---- repaint + re-sync when the player becomes visible again ----
+     A hidden player (Chat tab on mobile, or a backgrounded tab) keeps audio
+     and the clock running but stops painting frames, so seeks applied while it
+     was hidden leave a frozen picture. Snap it back when it reappears. */
+  const resync = sync.resync;
+  useEffect(() => {
+    const el = theaterRef.current;
+    if (!el) return undefined;
+    let wasVisible = true;
+    let io;
+
+    const fire = () => {
+      // Small delay lets the player backend settle after becoming visible.
+      setTimeout(() => resync(), 150);
+    };
+
+    if (typeof IntersectionObserver !== 'undefined') {
+      io = new IntersectionObserver(
+        (entries) => {
+          const visible = entries[0] ? entries[0].isIntersecting : true;
+          if (visible && !wasVisible) fire(); // hidden -> visible
+          wasVisible = visible;
+        },
+        { threshold: 0.05 },
+      );
+      io.observe(el);
+    }
+
+    const onDocVis = () => {
+      if (document.visibilityState === 'visible') fire();
+    };
+    document.addEventListener('visibilitychange', onDocVis);
+
+    return () => {
+      if (io) io.disconnect();
+      document.removeEventListener('visibilitychange', onDocVis);
+    };
+  }, [resync]);
+
   const toggleFullscreen = useCallback(() => {
     const el = theaterRef.current;
     if (!el) return;
