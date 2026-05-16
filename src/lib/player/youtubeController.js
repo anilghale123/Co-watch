@@ -129,6 +129,25 @@ export function createYouTubeController({ container, source, onStateChange, onRe
       try { return player && ready ? player.getDuration() || 0 : 0; }
       catch { return 0; }
     },
+    getVolume() {
+      if (!player || !ready) return 1;
+      try {
+        return Math.max(0, Math.min(100, player.getVolume())) / 100;
+      } catch {
+        return 1;
+      }
+    },
+    setVolume(value) {
+      const next = Math.round(Math.max(0, Math.min(1, value)) * 100);
+      whenReady(() => {
+        if (next === 0) {
+          player.mute();
+        } else {
+          player.unMute();
+          player.setVolume(next);
+        }
+      });
+    },
     getState() {
       if (!player || !ready) return PLAYER_STATE.UNSTARTED;
       try { return youtubeCodeToState(player.getPlayerState()); }

@@ -112,6 +112,14 @@ export function createHtml5Controller({ container, source, onStateChange, onRead
     getDuration() {
       return Number.isFinite(video.duration) ? video.duration : 0;
     },
+    getVolume() {
+      return Number.isFinite(video.volume) ? video.volume : 1;
+    },
+    setVolume(value) {
+      const next = Math.max(0, Math.min(1, value));
+      video.volume = next;
+      video.muted = next === 0;
+    },
     getState() {
       if (video.ended) return PLAYER_STATE.ENDED;
       if (video.readyState < 3 && !video.paused) return PLAYER_STATE.BUFFERING;

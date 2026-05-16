@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
  * One <video> tile. Attaching a MediaStream must happen via the `srcObject`
  * DOM property — it cannot be expressed in JSX — so this isolates that effect.
  */
-function VideoTile({ stream, label, muted, mirrored }) {
+function VideoTile({ stream, label, muted, mirrored, audioOn, videoOn }) {
   const videoRef = useRef(null);
 
   useEffect(() => {
@@ -38,6 +38,16 @@ function VideoTile({ stream, label, muted, mirrored }) {
           mirrored && '[transform:scaleX(-1)]',
         )}
       />
+      {videoOn === false ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/80 text-[11px] font-semibold uppercase tracking-wide text-white">
+          Camera off
+        </div>
+      ) : null}
+      {audioOn === false ? (
+        <span className="absolute right-1 top-1 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm">
+          Mic off
+        </span>
+      ) : null}
       <span className="absolute bottom-0.5 left-1 text-[10px] text-white/80 drop-shadow">
         {label}
       </span>
@@ -50,6 +60,8 @@ VideoTile.propTypes = {
   label: PropTypes.string.isRequired,
   muted: PropTypes.bool,
   mirrored: PropTypes.bool,
+  audioOn: PropTypes.bool,
+  videoOn: PropTypes.bool,
 };
 
 /** localStorage key for the overlay's last drag position. */
@@ -230,7 +242,14 @@ export default function WebRTCOverlay() {
 
             <div className="flex flex-wrap gap-1.5">
               {localStream ? (
-                <VideoTile stream={localStream} label="You" muted mirrored />
+                <VideoTile
+                  stream={localStream}
+                  label="You"
+                  muted
+                  mirrored
+                  audioOn={audioEnabled}
+                  videoOn={videoEnabled}
+                />
               ) : null}
               {remoteIds.map((id) => (
                 <VideoTile key={id} stream={remoteStreams[id]} label={nameOf(id)} />

@@ -60,6 +60,21 @@ export default function ChatSidebar() {
   const isTypingRef = useRef(false);
   const lastSeenSent = useRef(null);
   const inputRef = useRef(null);
+  const swipeStartX = useRef(null);
+
+  function handleMessagePointerDown(e) {
+    if (e.target.closest('button,a')) return;
+    swipeStartX.current = e.clientX;
+  }
+
+  function handleMessagePointerUp(e, message) {
+    if (swipeStartX.current === null) return;
+    const deltaX = e.clientX - swipeStartX.current;
+    swipeStartX.current = null;
+    if (Math.abs(deltaX) >= 50) {
+      startReply(message);
+    }
+  }
 
   // Is the chat actually on-screen? (false when collapsed on desktop or on the
   // Watch tab on mobile — a display:none element does not intersect.)
@@ -263,7 +278,13 @@ export default function ChatSidebar() {
             );
           }
           return (
-            <li key={m.id} className={`flex flex-col ${isSelf ? 'items-end' : 'items-start'}`}>
+            <li
+              key={m.id}
+              className={`flex flex-col ${isSelf ? 'items-end' : 'items-start'}`}
+              onPointerDown={handleMessagePointerDown}
+              onPointerUp={(e) => handleMessagePointerUp(e, m)}
+              onPointerCancel={() => { swipeStartX.current = null; }}
+            >
               <span
                 className="text-[11px] font-medium"
                 style={{ color: nameColor(m.displayName || '?') }}

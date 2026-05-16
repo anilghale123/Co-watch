@@ -27,6 +27,8 @@ export default function VideoController({
   const [duration, setDuration] = useState(0);
   const [scrubbing, setScrubbing] = useState(false);
   const [scrubValue, setScrubValue] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [lastVolume, setLastVolume] = useState(1);
   const pollRef = useRef(null);
 
   // Poll the controller a few times a second for the time display + scrubber.
@@ -37,6 +39,10 @@ export default function VideoController({
       if (!ctrl) return;
       if (!scrubbing) setCurrentTime(ctrl.getCurrentTime());
       setDuration(ctrl.getDuration());
+      if (typeof ctrl.getVolume === 'function') {
+        const nextVolume = ctrl.getVolume();
+        setVolume((prev) => (prev !== nextVolume ? nextVolume : prev));
+      }
     }, 250);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -46,6 +52,19 @@ export default function VideoController({
   const isPlaying = playbackState === PLAYER_STATE.PLAYING;
   const displayTime = scrubbing ? scrubValue : currentTime;
   const max = duration > 0 ? duration : 0;
+  const isMuted = volume <= 0.001;
+
+  function handleVolumeChange(nextVolume) {
+    const normalized = Math.max(0, Math.min(1, nextVolume));
+    setVolume(normalized);
+    if (normalized > 0) setLastVolume(normalized);
+    const ctrl = controllerRef.current;
+    if (ctrl && typeof ctrl.setVolume === 'function') ctrl.setVolume(normalized);
+  }
+
+  function toggleMute() {
+    handleVolumeChange(isMuted ? lastVolume || 0.5 : 0);
+  }
 
   return (
     <div className="flex items-center gap-1.5 border-t border-edge bg-panel px-2 py-2 sm:gap-3 sm:px-3">
@@ -103,6 +122,24 @@ export default function VideoController({
         </span>
       ) : null}
 
+      <Button
+        size="icon"
+        variant="ghost"
+        aria-label={isMuted ? 'Unmute video sound' : 'Mute video sound'}
+        onClick={toggleMute}
+      >
+        <span aria-hidden="true">{isMuted ? '🔇' : '🔊'}</span>
+      </Button>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={volume}
+        aria-label="Volume"
+        onChange={(e) => handleVolumeChange(Number(e.target.value))}
+        className="h-1.5 w-24 cursor-pointer accent-accent"
+      />
       <Button
         size="icon"
         variant="ghost"

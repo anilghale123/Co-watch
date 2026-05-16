@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import Modal from '@/components/ui/Modal';
 import Button from '@/components/ui/Button';
@@ -112,9 +113,15 @@ export default function RoomPage({ params, searchParams }) {
 
   const roomFull = useRoomStore((s) => s.roomFull);
   const chatCount = useRoomStore((s) => s.chat.length);
+  const router = useRouter();
 
   // Owns the connection lifecycle. No-ops while displayName is empty.
   useRoomSocket(roomId, displayName);
+
+  function handleLeave() {
+    if (!window.confirm('Leave the room? This will disconnect you from the co-watch session.')) return;
+    router.push('/');
+  }
 
   // On first mount: if the URL carried no ?name= (e.g. joined via an invite
   // link), recover the display name saved from a previous visit. This is what
@@ -202,11 +209,15 @@ export default function RoomPage({ params, searchParams }) {
             <span className="hidden sm:inline">{copied ? 'Link copied!' : 'Copy invite link'}</span>
             <span className="sm:hidden">{copied ? 'Copied!' : 'Invite'}</span>
           </Button>
-          <Link href="/">
-            <Button size="sm" variant="ghost" aria-label="Leave room">
-              Leave
-            </Button>
-          </Link>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            aria-label="Leave room"
+            onClick={handleLeave}
+          >
+            Leave
+          </Button>
         </div>
       </header>
 

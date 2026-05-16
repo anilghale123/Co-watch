@@ -160,10 +160,12 @@ export function useRoomSocket(roomId, displayName) {
     else socket.connect();
 
     /* ----------------- tab-close teardown (spec §3 gap #9) ----------------- */
-    const onBeforeUnload = () => {
+    const onBeforeUnload = (event) => {
       try {
         socket.emit(SOCKET_EVENTS.ROOM_LEAVE);
       } catch { /* page is going away anyway */ }
+      event.preventDefault();
+      event.returnValue = '';
     };
     window.addEventListener('beforeunload', onBeforeUnload);
 
