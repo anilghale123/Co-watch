@@ -37,6 +37,40 @@ and press play.
 
 ---
 
+## Deploying to Railway
+
+This app needs a **long-running Node process** (for the persistent Socket.IO
+server), so it deploys to Railway — not to serverless platforms like Vercel,
+which cannot host a custom server or a persistent WebSocket `io` instance.
+
+1. Push this repo to GitHub.
+2. On [railway.app](https://railway.app): **New Project → Deploy from GitHub
+   repo** and pick this repo.
+3. Railway reads [`railway.json`](railway.json) and runs `npm run build` then
+   `npm start` automatically.
+4. **Settings → Networking → Generate Domain** to get a public URL.
+
+### Environment variables on Railway
+
+For a single-service Railway deploy you do **not** need to set any environment
+variables — the defaults are correct:
+
+| Variable | Set it? | Why |
+|---|---|---|
+| `PORT` | **No** — Railway injects it | `server.js` already reads `process.env.PORT`. |
+| `NODE_ENV` | **No** — Railway sets `production` | The `npm start` script also sets it. |
+| `NEXT_PUBLIC_SOCKET_URL` | **Leave empty / unset** | The client connects same-origin. Setting this is only for a split frontend/backend deploy. |
+| `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` | Optional | Only if you stand up a TURN server (see below). |
+
+> **Important — `NEXT_PUBLIC_*` are baked at build time.** If you ever add a
+> `NEXT_PUBLIC_` variable (e.g. a public TURN URL), you must **redeploy** so the
+> client bundle is rebuilt with the new value. Server-only vars (`TURN_URL`
+> etc.) take effect on restart without a rebuild.
+
+That's it — no env setup is required to go live.
+
+---
+
 ## What you can watch
 
 | Source | Supported | Notes |
