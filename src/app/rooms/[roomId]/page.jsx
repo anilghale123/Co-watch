@@ -15,21 +15,84 @@ import ChatSidebar from '@/features/rooms/components/ChatSidebar';
 import WebRTCOverlay from '@/features/rooms/components/WebRTCOverlay';
 import { cn } from '@/lib/utils';
 
-/** Small connection-status pill driven by the Zustand store. */
+/**
+ * Compact connection-status indicator. When connected it is just a small green
+ * dot (like an "online" indicator) so it barely uses any header space; other
+ * states still show a short label so problems stay visible.
+ */
 function ConnectionPill() {
   const status = useRoomStore((s) => s.connectionStatus);
   const map = {
-    idle: { text: 'Idle', cls: 'bg-edge text-white/60' },
-    connecting: { text: 'Connecting…', cls: 'bg-yellow-600/30 text-yellow-300' },
-    connected: { text: 'Connected', cls: 'bg-green-600/30 text-green-300' },
-    reconnecting: { text: 'Reconnecting…', cls: 'bg-yellow-600/30 text-yellow-300 animate-pulse2' },
-    disconnected: { text: 'Disconnected', cls: 'bg-red-600/30 text-red-300' },
+    idle: { text: 'Idle', dot: 'bg-white/40', label: 'text-white/60', pulse: false },
+    connecting: { text: 'Connecting…', dot: 'bg-yellow-400', label: 'text-yellow-300', pulse: true },
+    connected: { text: 'Connected', dot: 'bg-green-400', label: 'text-green-300', pulse: false },
+    reconnecting: { text: 'Reconnecting…', dot: 'bg-yellow-400', label: 'text-yellow-300', pulse: true },
+    disconnected: { text: 'Disconnected', dot: 'bg-red-400', label: 'text-red-300', pulse: false },
   };
   const s = map[status] || map.idle;
   return (
-    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-[11px] ${s.cls}`}>
-      {s.text}
+    <span className="flex items-center gap-1.5" title={s.text} aria-label={s.text}>
+      <span className="relative flex h-2 w-2">
+        {s.pulse ? (
+          <span className={cn('absolute inline-flex h-full w-full animate-ping rounded-full opacity-75', s.dot)} />
+        ) : null}
+        <span className={cn('relative inline-flex h-2 w-2 rounded-full', s.dot)} />
+      </span>
+      {/* Connected is self-explanatory as a dot — only label the other states. */}
+      {status !== 'connected' ? (
+        <span className={cn('text-[10px] font-medium sm:text-[11px]', s.label)}>{s.text}</span>
+      ) : null}
     </span>
+  );
+}
+
+/**
+ * PWA install button. Captures the browser's `beforeinstallprompt` event and
+ * surfaces a tap-to-install action. It only renders when the app is actually
+ * installable (and not already running standalone), so it stays hidden on
+ * desktop once installed and on browsers that don't support installation.
+ */
+function InstallButton() {
+  const [promptEvent, setPromptEvent] = useState(null);
+
+  useEffect(() => {
+    // Already installed / launched as an app — nothing to offer.
+    const standalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+    if (standalone) return undefined;
+
+    function onBeforeInstall(e) {
+      e.preventDefault(); // stop Chrome's mini-infobar so we control the UI
+      setPromptEvent(e);
+    }
+    function onInstalled() {
+      setPromptEvent(null);
+    }
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  if (!promptEvent) return null;
+
+  async function install() {
+    promptEvent.prompt();
+    try {
+      await promptEvent.userChoice;
+    } catch { /* user dismissed */ }
+    setPromptEvent(null); // a prompt can only be used once
+  }
+
+  return (
+    <Button size="sm" variant="primary" onClick={install} aria-label="Install CoWatch app">
+      <span aria-hidden="true">⤓ </span>
+      <span className="hidden sm:inline">Install app</span>
+      <span className="sm:hidden">Install</span>
+    </Button>
   );
 }
 
@@ -205,6 +268,7 @@ export default function RoomPage({ params, searchParams }) {
         </Link>
         <ConnectionPill />
         <div className="ml-auto flex items-center gap-2">
+          <InstallButton />
           <Button size="sm" variant="secondary" onClick={copyInvite}>
             <span className="hidden sm:inline">{copied ? 'Link copied!' : 'Copy invite link'}</span>
             <span className="sm:hidden">{copied ? 'Copied!' : 'Invite'}</span>
