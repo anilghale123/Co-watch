@@ -47,44 +47,65 @@ function ConnectionPill() {
 }
 
 /**
- * PWA install button. Captures the browser's `beforeinstallprompt` event and
- * surfaces a tap-to-install action. It only renders when the app is actually
- * installable (and not already running standalone), so it stays hidden on
- * desktop once installed and on browsers that don't support installation.
+ * PWA install button. It stays visible the whole time the app runs in a
+ * regular browser tab — only hidden once the app is launched as an installed
+ * PWA (standalone display mode). When the browser's `beforeinstallprompt`
+ * event is available it triggers the native install dialog; otherwise it
+ * falls back to manual install instructions.
  */
 function InstallButton() {
+  // `true` until we've checked, so the button never flashes inside the PWA.
+  const [standalone, setStandalone] = useState(true);
   const [promptEvent, setPromptEvent] = useState(null);
 
   useEffect(() => {
     // Already installed / launched as an app — nothing to offer.
-    const standalone =
+    const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
       window.navigator.standalone === true;
-    if (standalone) return undefined;
+    setStandalone(isStandalone);
+    if (isStandalone) return undefined;
 
-    function onBeforeInstall(e) {
-      e.preventDefault(); // stop Chrome's mini-infobar so we control the UI
-      setPromptEvent(e);
+    // The event may have been captured globally before this mounted.
+    setPromptEvent(window.__deferredInstallPrompt || null);
+
+    function onInstallable() {
+      setPromptEvent(window.__deferredInstallPrompt || null);
     }
     function onInstalled() {
       setPromptEvent(null);
+      setStandalone(true);
     }
-    window.addEventListener('beforeinstallprompt', onBeforeInstall);
-    window.addEventListener('appinstalled', onInstalled);
+    window.addEventListener('pwa-installable', onInstallable);
+    window.addEventListener('pwa-installed', onInstalled);
     return () => {
-      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
-      window.removeEventListener('appinstalled', onInstalled);
+      window.removeEventListener('pwa-installable', onInstallable);
+      window.removeEventListener('pwa-installed', onInstalled);
     };
   }, []);
 
-  if (!promptEvent) return null;
+  // Hidden only inside the installed PWA; always visible in the browser.
+  if (standalone) return null;
 
   async function install() {
+    if (!promptEvent) {
+      // No native prompt available (already dismissed, iOS Safari, etc.).
+      window.alert(
+        'To install CoWatch:\n\n' +
+          '• Chrome / Edge (desktop): click the install icon in the address bar.\n' +
+          '• Android: open the browser menu, tap "Install app" / "Add to Home screen".\n' +
+          '• iPhone / iPad (Safari): tap Share, then "Add to Home Screen".',
+      );
+      return;
+    }
     promptEvent.prompt();
     try {
-      await promptEvent.userChoice;
+      const choice = await promptEvent.userChoice;
+      if (choice && choice.outcome === 'accepted') {
+        window.__deferredInstallPrompt = null;
+        setPromptEvent(null); // a prompt can only be used once
+      }
     } catch { /* user dismissed */ }
-    setPromptEvent(null); // a prompt can only be used once
   }
 
   return (
