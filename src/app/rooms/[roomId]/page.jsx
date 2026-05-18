@@ -13,6 +13,7 @@ import { useRoomStore } from '@/features/rooms/stores/useRoomStore';
 import WatchTheater from '@/features/rooms/components/WatchTheater';
 import ChatSidebar from '@/features/rooms/components/ChatSidebar';
 import WebRTCOverlay from '@/features/rooms/components/WebRTCOverlay';
+import { WebRTCProvider } from '@/features/rooms/components/WebRTCProvider';
 import { cn } from '@/lib/utils';
 
 /**
@@ -309,7 +310,9 @@ export default function RoomPage({ params, searchParams }) {
       {/* invite strip — visible while you are alone */}
       <InviteBanner roomId={roomId} />
 
-      {/* body */}
+      {/* body — WebRTCProvider owns the single shared A/V + screen-share mesh
+          consumed by both WatchTheater and the floating overlay */}
+      <WebRTCProvider>
       <div className="flex min-h-0 flex-1 flex-row">
         {/* theater — full screen on mobile when the Watch tab is active */}
         <div
@@ -378,6 +381,7 @@ export default function RoomPage({ params, searchParams }) {
       <ErrorBoundary fallback={null}>
         <WebRTCOverlay />
       </ErrorBoundary>
+      </WebRTCProvider>
 
       {/* room-full rejection (spec §3 gap #4 / acceptance criteria) */}
       <Modal open={roomFull} title="This room is full" dismissable={false}>

@@ -17,7 +17,7 @@
  */
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getSocket } from '@/lib/socket/socketClient';
 import { useRoomStore } from '@/features/rooms/stores/useRoomStore';
 import { SOCKET_EVENTS } from '@/features/rooms/room-types';
@@ -48,23 +48,47 @@ const ICE_SERVERS = [
  *   mediaPermission: string,
  *   audioEnabled: boolean,
  *   videoEnabled: boolean,
+ *   mediaStarted: boolean,
  *   toggleAudio: ()=>void,
  *   toggleVideo: ()=>void,
+ *   startMedia: ()=>void,
+ *   stopMedia: ()=>void,
  *   retryMedia: ()=>void,
+ *   screenShare: {sharing:boolean, streamId:string|null, sharerId:string|null},
+ *   screenStream: MediaStream|null,
+ *   remoteScreenStream: MediaStream|null,
+ *   startScreenShare: ()=>Promise<{ok:boolean, error?:string}>,
+ *   stopScreenShare: ()=>void,
  * }}
  */
 export function useWebRTCConnection() {
   const [localStream, setLocalStream] = useState(null);
-  const [remoteStreams, setRemoteStreams] = useState({});
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
+  // Voice/video stays OFF until the user explicitly opts in — no camera/mic
+  // permission prompt fires on app open.
+  const [mediaStarted, setMediaStarted] = useState(false);
   const [mediaAttempt, setMediaAttempt] = useState(0); // bump to retry getUserMedia
+  // Local screen-capture stream when THIS client is the one sharing.
+  const [screenStream, setScreenStream] = useState(null);
+  // Bumped whenever a peer's set of inbound streams changes — drives recompute.
+  const [streamsRev, setStreamsRev] = useState(0);
 
   /** @type {{current: Map<string, any>}} socketId -> simple-peer instance */
   const peersRef = useRef(new Map());
+  /**
+   * socketId -> inbound MediaStream[]. A peer can carry more than one stream
+   * (e.g. the host sends BOTH a camera stream and a screen-share stream), so
+   * each peer's streams are tracked as a list and classified on read.
+   * @type {{current: Map<string, MediaStream[]>}}
+   */
+  const peerStreamsRef = useRef(new Map());
   const localStreamRef = useRef(null);
+  const screenStreamRef = useRef(null);
   const SimplePeerRef = useRef(null); // lazily-loaded simple-peer constructor
   const mountedRef = useRef(true);
+
+  const bumpStreams = useCallback(() => setStreamsRev((n) => n + 1), []);
 
   const setPermission = (p) => useRoomStore.getState().setMediaPermission(p);
 
@@ -79,13 +103,8 @@ export function useWebRTCConnection() {
       try { peer.destroy(); } catch { /* noop */ }
       peersRef.current.delete(peerId);
     }
-    setRemoteStreams((prev) => {
-      if (!prev[peerId]) return prev;
-      const next = { ...prev };
-      delete next[peerId];
-      return next;
-    });
-  }, []);
+    if (peerStreamsRef.current.delete(peerId)) bumpStreams();
+  }, [bumpStreams]);
 
   const destroyAllPeers = useCallback(() => {
     Array.from(peersRef.current.keys()).forEach((id) => destroyPeer(id));
@@ -115,7 +134,12 @@ export function useWebRTCConnection() {
 
     peer.on('stream', (stream) => {
       if (!mountedRef.current) return;
-      setRemoteStreams((prev) => ({ ...prev, [peerId]: stream }));
+      // Append (deduped) — a peer may deliver a camera AND a screen stream.
+      const arr = peerStreamsRef.current.get(peerId) || [];
+      if (!arr.some((s) => s.id === stream.id)) {
+        peerStreamsRef.current.set(peerId, arr.concat(stream));
+        bumpStreams();
+      }
     });
 
     peer.on('connect', () => {
@@ -130,14 +154,20 @@ export function useWebRTCConnection() {
     });
 
     peersRef.current.set(peerId, peer);
+    // A screen share already in progress must reach this freshly-joined peer.
+    if (screenStreamRef.current) {
+      try { peer.addStream(screenStreamRef.current); } catch { /* noop */ }
+    }
     return peer;
-  }, [destroyPeer]);
+  }, [bumpStreams, destroyPeer]);
 
   /* ------------------------------------------------------------------ *
    * getUserMedia — with explicit denial handling
    * ------------------------------------------------------------------ */
 
   useEffect(() => {
+    // Only acquire camera/mic once the user has opted in.
+    if (!mediaStarted) return undefined;
     mountedRef.current = true;
     let cancelled = false;
 
@@ -176,7 +206,7 @@ export function useWebRTCConnection() {
     return () => {
       cancelled = true;
     };
-  }, [mediaAttempt]);
+  }, [mediaStarted, mediaAttempt]);
 
   /* ------------------------------------------------------------------ *
    * Signaling lifecycle
@@ -230,9 +260,35 @@ export function useWebRTCConnection() {
       }
     };
 
+    // A peer announced it started / stopped sharing its screen. We only need
+    // the announced streamId so the inbound stream can be classified; on stop
+    // we drop the now-stale stream so it doesn't resurface as a camera tile.
+    const onScreenShare = (payload) => {
+      if (!payload || typeof payload.sharing !== 'boolean') return;
+      const store = useRoomStore.getState();
+      if (payload.sharing) {
+        store.setScreenShare({
+          sharing: true,
+          streamId: payload.streamId || null,
+          sharerId: payload.originId || null,
+        });
+      } else {
+        const oldId = store.screenShare.streamId;
+        if (oldId) {
+          peerStreamsRef.current.forEach((arr, pid) => {
+            const next = arr.filter((s) => s.id !== oldId);
+            if (next.length !== arr.length) peerStreamsRef.current.set(pid, next);
+          });
+          bumpStreams();
+        }
+        store.setScreenShare({ sharing: false, streamId: null, sharerId: null });
+      }
+    };
+
     socket.on(SOCKET_EVENTS.RTC_PEER_JOINED, onPeerJoined);
     socket.on(SOCKET_EVENTS.RTC_PEER_LEFT, onPeerLeft);
     socket.on(SOCKET_EVENTS.RTC_SIGNAL, onSignal);
+    socket.on(SOCKET_EVENTS.SCREEN_SHARE, onScreenShare);
 
     /* ---- COMPLETE teardown ---- */
     return () => {
@@ -241,14 +297,20 @@ export function useWebRTCConnection() {
       socket.off(SOCKET_EVENTS.RTC_PEER_JOINED, onPeerJoined);
       socket.off(SOCKET_EVENTS.RTC_PEER_LEFT, onPeerLeft);
       socket.off(SOCKET_EVENTS.RTC_SIGNAL, onSignal);
+      socket.off(SOCKET_EVENTS.SCREEN_SHARE, onScreenShare);
       destroyAllPeers();
       // Stop every local media track — the mic/cam indicator MUST go off.
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((t) => t.stop());
         localStreamRef.current = null;
       }
+      // Stop screen capture too — the browser "sharing" banner must go away.
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((t) => t.stop());
+        screenStreamRef.current = null;
+      }
     };
-  }, [createPeer, destroyAllPeers, destroyPeer]);
+  }, [bumpStreams, createPeer, destroyAllPeers, destroyPeer]);
 
   /* ------------------------------------------------------------------ *
    * Track toggles — flip `enabled`; no renegotiation needed.
@@ -275,7 +337,116 @@ export function useWebRTCConnection() {
     setMediaAttempt((n) => n + 1);
   }, []);
 
+  /** User opts in: start requesting camera/mic and join the A/V mesh. */
+  const startMedia = useCallback(() => {
+    setMediaStarted(true);
+  }, []);
+
+  /** User opts out: stop the camera/mic and drop the local stream from peers. */
+  const stopMedia = useCallback(() => {
+    const stream = localStreamRef.current;
+    if (stream) {
+      peersRef.current.forEach((peer) => {
+        try { peer.removeStream(stream); } catch { /* noop */ }
+      });
+      stream.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+    }
+    setLocalStream(null);
+    setAudioEnabled(true);
+    setVideoEnabled(true);
+    setMediaAttempt(0);
+    setMediaStarted(false);
+    setPermission('unknown');
+  }, []);
+
+  /* ------------------------------------------------------------------ *
+   * Screen sharing — broadcast one client's display to the whole room.
+   * ------------------------------------------------------------------ */
+
+  /** Stop the screen share: pull the stream from peers and announce the end. */
+  const stopScreenShare = useCallback(() => {
+    const stream = screenStreamRef.current;
+    if (stream) {
+      peersRef.current.forEach((peer) => {
+        try { peer.removeStream(stream); } catch { /* noop */ }
+      });
+      stream.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current = null;
+    }
+    setScreenStream(null);
+    try {
+      getSocket().emit(SOCKET_EVENTS.SCREEN_SHARE, { sharing: false });
+    } catch { /* not connected */ }
+    useRoomStore.getState().setScreenShare({ sharing: false, streamId: null, sharerId: null });
+  }, []);
+
+  /**
+   * Start sharing this display. Captures via getDisplayMedia, pushes the stream
+   * onto every peer connection, and announces it so receivers can identify it.
+   * @returns {Promise<{ok:boolean, error?:string}>}
+   */
+  const startScreenShare = useCallback(async () => {
+    if (screenStreamRef.current) return { ok: true };
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      return { ok: false, error: 'Screen sharing is not supported in this browser.' };
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    } catch (err) {
+      // The user dismissing the picker is not an error worth surfacing.
+      if (err && err.name === 'NotAllowedError') return { ok: false, error: 'cancelled' };
+      return { ok: false, error: 'Could not start screen sharing.' };
+    }
+    if (!mountedRef.current) {
+      stream.getTracks().forEach((t) => t.stop());
+      return { ok: false, error: 'cancelled' };
+    }
+    screenStreamRef.current = stream;
+    setScreenStream(stream);
+    peersRef.current.forEach((peer) => {
+      try { peer.addStream(stream); } catch { /* noop */ }
+    });
+    getSocket().emit(SOCKET_EVENTS.SCREEN_SHARE, { sharing: true, streamId: stream.id });
+    useRoomStore.getState().setScreenShare({
+      sharing: true,
+      streamId: stream.id,
+      sharerId: useRoomStore.getState().selfId,
+    });
+    // The browser's own "Stop sharing" control ends the track — mirror that.
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.addEventListener('ended', () => stopScreenShare(), { once: true });
+    }
+    return { ok: true };
+  }, [stopScreenShare]);
+
   const mediaPermission = useRoomStore((s) => s.mediaPermission);
+  const screenShare = useRoomStore((s) => s.screenShare);
+
+  // Classify each peer's inbound streams: the one whose id matches the
+  // announced screen share is the shared screen; the rest are camera tiles.
+  const remoteStreams = useMemo(() => {
+    const out = {};
+    peerStreamsRef.current.forEach((arr, peerId) => {
+      const cam = arr.find((s) => s.id !== screenShare.streamId);
+      if (cam) out[peerId] = cam;
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamsRev, screenShare.streamId]);
+
+  const remoteScreenStream = useMemo(() => {
+    if (!screenShare.sharing || !screenShare.streamId) return null;
+    let found = null;
+    peerStreamsRef.current.forEach((arr) => {
+      const m = arr.find((s) => s.id === screenShare.streamId);
+      if (m) found = m;
+    });
+    return found;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamsRev, screenShare.sharing, screenShare.streamId]);
 
   return {
     localStream,
@@ -283,8 +454,17 @@ export function useWebRTCConnection() {
     mediaPermission,
     audioEnabled,
     videoEnabled,
+    mediaStarted,
     toggleAudio,
     toggleVideo,
+    startMedia,
+    stopMedia,
     retryMedia,
+    // screen sharing
+    screenShare,
+    screenStream,
+    remoteScreenStream,
+    startScreenShare,
+    stopScreenShare,
   };
 }

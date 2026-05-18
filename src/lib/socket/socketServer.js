@@ -43,6 +43,8 @@ function createRoom() {
     hostId: null,
     playback: { state: T.PLAYER_STATE.UNSTARTED, currentTime: 0, updatedAt: Date.now() },
     source: null,
+    /** Live screen-share state — lets late joiners know a share is in progress. */
+    screen: { sharing: false, streamId: null, sharerId: null },
     /** @type {Array<import('../../features/rooms/room-types.js').ChatPayload>} */
     messages: [], // recent chat history — survives a refresh / brief absence
     /** @type {NodeJS.Timeout|null} */
@@ -77,6 +79,7 @@ function buildSnapshot(roomId, room, selfId) {
     peers: serializePeers(room),
     playback: room.playback,
     source: room.source,
+    screen: room.screen, // resync an in-progress screen share on join
     messages: room.messages, // resync chat history on join / reconnect
     serverTime: Date.now(),
     selfId,
@@ -287,6 +290,33 @@ function handleConnection(socket) {
     return { ...room.source };
   });
 
+  /* ---- SCREEN_SHARE (host starts; anyone may stop their own share) ----
+     Not routed through relayFromHost: only STARTING a share is host-gated, so
+     a host who hands off authority mid-share can still cleanly stop it. */
+  socket.on(T.SOCKET_EVENTS.SCREEN_SHARE, (payload) => {
+    try {
+      const room = currentRoom();
+      if (!room) return reject('screen:share', T.ROOM_ERROR_CODE.NOT_IN_ROOM);
+      if (!T.isValidScreenSharePayload(payload)) {
+        return reject('screen:share', T.ROOM_ERROR_CODE.INVALID_PAYLOAD);
+      }
+      if (payload.sharing && room.hostId !== socket.id) {
+        return reject('screen:share', T.ROOM_ERROR_CODE.NOT_HOST);
+      }
+      room.screen = payload.sharing
+        ? { sharing: true, streamId: payload.streamId, sharerId: socket.id }
+        : { sharing: false, streamId: null, sharerId: null };
+      socket.to(socket.data.roomId).emit(T.SOCKET_EVENTS.SCREEN_SHARE, {
+        sharing: payload.sharing,
+        streamId: payload.sharing ? payload.streamId : null,
+        originId: socket.id,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[socket] screen:share handler error', err);
+    }
+  });
+
   /* ---- CONTROL_REQUEST (guest -> host) ---- */
   socket.on(T.SOCKET_EVENTS.CONTROL_REQUEST, (payload) => {
     try {
@@ -463,6 +493,17 @@ function handleConnection(socket) {
     }
 
     socket.to(roomId).emit(T.SOCKET_EVENTS.RTC_PEER_LEFT, { socketId: socket.id });
+
+    // If the person sharing their screen left, end the share for everyone.
+    if (room.screen && room.screen.sharerId === socket.id) {
+      room.screen = { sharing: false, streamId: null, sharerId: null };
+      socket.to(roomId).emit(T.SOCKET_EVENTS.SCREEN_SHARE, {
+        sharing: false,
+        streamId: null,
+        originId: socket.id,
+      });
+    }
+
     if (wasHost) migrateHost(roomId, room);
     broadcastPresence(roomId, room);
   }

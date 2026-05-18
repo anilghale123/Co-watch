@@ -2,14 +2,46 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import PropTypes from 'prop-types';
 import { getSocket } from '@/lib/socket/socketClient';
 import { createPlayerController } from '@/lib/player/createPlayerController';
 import { useRoomStore, selectIsHost } from '@/features/rooms/stores/useRoomStore';
 import { useVideoSync } from '@/features/rooms/hooks/useVideoSync';
+import { useWebRTC } from '@/features/rooms/components/WebRTCProvider';
 import { SOCKET_EVENTS, PLAYER_STATE } from '@/features/rooms/room-types';
 import { parseVideoSource } from '@/lib/utils';
 import VideoController from '@/features/rooms/components/VideoController';
 import Button from '@/components/ui/Button';
+
+/**
+ * Full-bleed <video> for a live screen-share stream. Like the A/V tiles, the
+ * MediaStream is attached via the `srcObject` DOM property (not expressible in
+ * JSX). `object-contain` keeps the shared screen uncropped at any aspect ratio.
+ */
+function ScreenShareVideo({ stream, muted }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el && stream && el.srcObject !== stream) el.srcObject = stream;
+    return () => {
+      if (el) el.srcObject = null;
+    };
+  }, [stream]);
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      playsInline
+      muted={muted}
+      className="h-full w-full bg-black object-contain"
+    />
+  );
+}
+
+ScreenShareVideo.propTypes = {
+  stream: PropTypes.object,
+  muted: PropTypes.bool,
+};
 
 /**
  * Hosts the active player + its polymorphic controller, and wires the sync
@@ -21,6 +53,16 @@ export default function WatchTheater() {
   const playbackState = useRoomStore((s) => s.playbackState);
   const remoteBuffering = useRoomStore((s) => s.remoteBuffering);
   const isHost = useRoomStore(selectIsHost);
+  const selfId = useRoomStore((s) => s.selfId);
+  const peers = useRoomStore((s) => s.peers);
+  const screenShare = useRoomStore((s) => s.screenShare);
+
+  const {
+    screenStream,
+    remoteScreenStream,
+    startScreenShare,
+    stopScreenShare,
+  } = useWebRTC();
 
   const containerRef = useRef(null);
   const theaterRef = useRef(null);
@@ -29,6 +71,27 @@ export default function WatchTheater() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [linkInput, setLinkInput] = useState('');
   const [linkError, setLinkError] = useState('');
+  const [screenError, setScreenError] = useState('');
+
+  // While a screen share runs it takes over the theater. Pick the right
+  // stream: our own local capture if WE are sharing, otherwise the peer's.
+  const sharingBySelf = screenShare.sharing && screenShare.sharerId === selfId;
+  const screenViewStream = sharingBySelf ? screenStream : remoteScreenStream;
+  const sharerName = sharingBySelf
+    ? 'You'
+    : (peers.find((p) => p.socketId === screenShare.sharerId) || {}).displayName || 'A peer';
+
+  const handleToggleScreenShare = useCallback(async () => {
+    if (sharingBySelf) {
+      stopScreenShare();
+      return;
+    }
+    setScreenError('');
+    const res = await startScreenShare();
+    if (!res.ok && res.error && res.error !== 'cancelled') {
+      setScreenError(res.error);
+    }
+  }, [sharingBySelf, startScreenShare, stopScreenShare]);
 
   // The sync engine — controllerRef is mutated by the effect below.
   const sync = useVideoSync(controllerRef);
@@ -140,16 +203,43 @@ export default function WatchTheater() {
   return (
     <main className="flex min-w-0 flex-1 flex-col bg-ink" aria-label="Video theater">
       <div ref={theaterRef} className="relative flex flex-1 flex-col bg-black">
+        {/* host-only screen-share toggle — works in fullscreen too */}
+        {isHost ? (
+          <button
+            type="button"
+            onClick={handleToggleScreenShare}
+            className="absolute right-2 top-2 z-30 rounded-lg bg-black/70 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur hover:bg-black/90"
+          >
+            {sharingBySelf ? '⏹ Stop sharing' : '🖥 Share screen'}
+          </button>
+        ) : null}
+
         {/* player mount point */}
         <div className="relative min-h-0 flex-1">
           <div ref={containerRef} className="absolute inset-0 h-full w-full" />
 
-          {!source ? (
+          {/* screen share takes over the theater while it is active */}
+          {screenShare.sharing ? (
+            <div className="absolute inset-0 z-20 bg-black">
+              {screenViewStream ? (
+                <ScreenShareVideo stream={screenViewStream} muted={sharingBySelf} />
+              ) : (
+                <div className="flex h-full items-center justify-center p-6 text-center text-sm text-white/60">
+                  Connecting to {sharerName === 'You' ? 'your' : `${sharerName}'s`} screen share…
+                </div>
+              )}
+              <span className="absolute left-2 top-2 rounded-full bg-black/75 px-3 py-1 text-xs font-medium text-white/90">
+                🖥 {sharingBySelf ? 'You are sharing your screen' : `${sharerName}'s screen`}
+              </span>
+            </div>
+          ) : null}
+
+          {!source && !screenShare.sharing ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
               <p className="text-lg font-semibold text-white">No video loaded yet</p>
               <p className="max-w-sm text-sm text-white/60">
                 {isHost
-                  ? 'Paste a YouTube or direct video link below to start watching together.'
+                  ? 'Paste a YouTube or direct video link below, or share your screen, to start watching together.'
                   : 'Waiting for the host to pick something to watch…'}
               </p>
             </div>
@@ -208,6 +298,11 @@ export default function WatchTheater() {
       {linkError ? (
         <p role="alert" className="bg-panel px-3 pb-2 text-xs text-red-400">
           {linkError}
+        </p>
+      ) : null}
+      {screenError ? (
+        <p role="alert" className="bg-panel px-3 pb-2 text-xs text-red-400">
+          {screenError}
         </p>
       ) : null}
     </main>

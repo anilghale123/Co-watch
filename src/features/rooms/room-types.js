@@ -49,6 +49,7 @@ const SOCKET_EVENTS = Object.freeze({
   SYNC_REQUEST: 'sync:request', // guest asks host for a fresh snapshot
   SOURCE_CHANGE: 'source:change', // host swaps the loaded video
   CONTROL_REQUEST: 'control:request', // guest -> host: "please do X"
+  SCREEN_SHARE: 'screen:share', // host announces start/stop of a screen share
 
   // --- chat ---
   CHAT_MESSAGE: 'chat:message',
@@ -417,6 +418,21 @@ function isValidTypingPayload(p) {
 }
 
 /**
+ * Guards SCREEN_SHARE. When starting a share, the announcement MUST carry the
+ * MediaStream id so receivers can tell the screen stream apart from camera
+ * streams arriving on the same peer connection.
+ * @param {*} p
+ * @returns {boolean}
+ */
+function isValidScreenSharePayload(p) {
+  if (!isObject(p) || typeof p.sharing !== 'boolean') return false;
+  if (p.sharing && (!isNonEmptyString(p.streamId) || p.streamId.length > 128)) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Guards RTC_SIGNAL. We validate routing only; `signal` is an opaque blob the
  * server must never interpret. `targetId` is checked again server-side against
  * actual room membership to prevent cross-room WebRTC hijack (spec §3 gap #7).
@@ -487,6 +503,7 @@ module.exports = {
   isValidHostTransferPayload,
   isValidTypingPayload,
   isValidRtcSignalPayload,
+  isValidScreenSharePayload,
   // helpers
   youtubeCodeToState,
 };

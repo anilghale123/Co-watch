@@ -67,6 +67,14 @@ const initialState = {
   /* ---- WebRTC media permission (spec §3 gap #8) ---- */
   /** @type {MediaPermission} */
   mediaPermission: 'unknown',
+
+  /* ---- screen sharing ---- */
+  /**
+   * Who (if anyone) is screen-sharing into the theater. `streamId` is the
+   * MediaStream id used to pick the screen stream out of the WebRTC mesh.
+   * @type {{sharing:boolean, streamId:string|null, sharerId:string|null}}
+   */
+  screenShare: { sharing: false, streamId: null, sharerId: null },
 };
 
 export const useRoomStore = create((set, get) => ({
@@ -113,6 +121,13 @@ export const useRoomStore = create((set, get) => ({
         hostId: snap.hostId,
         peers: Array.isArray(snap.peers) ? snap.peers : [],
         source: snap.source || null,
+        screenShare: snap.screen && snap.screen.sharing
+          ? {
+            sharing: true,
+            streamId: snap.screen.streamId || null,
+            sharerId: snap.screen.sharerId || null,
+          }
+          : { sharing: false, streamId: null, sharerId: null },
         playbackState: snap.playback ? snap.playback.state : PLAYER_STATE.UNSTARTED,
         playbackTime: snap.playback ? snap.playback.currentTime : 0,
         chat,
@@ -240,6 +255,11 @@ export const useRoomStore = create((set, get) => ({
 
   /** @param {MediaPermission} perm */
   setMediaPermission: (perm) => set({ mediaPermission: perm }),
+
+  /* ---------------- screen sharing ---------------- */
+
+  /** @param {{sharing:boolean, streamId:string|null, sharerId:string|null}} s */
+  setScreenShare: (s) => set({ screenShare: s }),
 
   /* ---------------- teardown ---------------- */
 
